@@ -12,7 +12,7 @@ def scmap(target_data,
         algorithm_flavor="centroid",
         gene_selection_flavor="HVGs",
         n_genes_selected=1000,
-        metrics=["cosine","pearson","spearman"],
+        metrics=["cosine","correlation"],
         similarity_threshold=.7,
         inplace=True,
         key_added="scmap_annotation",
@@ -26,7 +26,7 @@ def scmap(target_data,
             algorithm_flavor="centroid",
             gene_selection_flavor="HVGs",
             n_genes_selected=1000,
-            metrics=["cosine","pearson","spearman"],
+            metrics=["cosine","pearson"],
             similarity_threshold=.7,
             inplace=True,
             key_added="scmap_annotation",
@@ -65,7 +65,7 @@ def scmap(target_data,
     
     if gene_selection_flavor == "HVGs":
 
-        gene_subset = reference_adata.var["highly_varying"].values
+        gene_subset = scp.pp.highly_variable_genes(reference_adata,n_top_genes=n_genes_selected,inplace=False)["highly_variable"].values
 
     elif gene_selection_flavor == "random":
 
@@ -87,8 +87,8 @@ def scmap(target_data,
 
         # Fit linear model and get residuals
         model = LinearRegression()
-        model.fit(m.reshape(1,-1),d)
-        res = (d - model.predict(m.reshape(1,-1)))**2
+        model.fit(m.reshape(-1,1),d)
+        res = (d - model.predict(m.reshape(-1,1)))**2
 
         # Get gene subset based on residuals
 
@@ -115,12 +115,13 @@ def scmap(target_data,
 
         #Define the labels of cells and centroids
         labels_ref_cells = reference_adata.obs[key_annotations].values.astype(str)
-        labels_ref = np.unique(labels_ref_cells)
+        labels_ref = pd.unique(labels_ref_cells)
 
         #Make centroids based on the median expression
-        X_ref_centroids = np.zeros(len(labels_ref), X_tar.shape[1])
+        X_ref_centroids = np.zeros([len(labels_ref), X_ref.shape[1]])
         for i,label in enumerate(labels_ref):
-            X_ref_centroids[i,:] = np.median(X[labels_ref_cells == label],axis=0)
+            if X_ref[labels_ref_cells == label,:].shape[0] != 0:
+                X_ref_centroids[i,:] = X_ref[labels_ref_cells == label,:].mean(axis=0)
 
         #Assign to the target
         X_ref = X_ref_centroids
@@ -131,55 +132,59 @@ def scmap(target_data,
         for i,metric in enumerate(metrics):
             model = KNeighborsClassifier(n_neighbors=1,metric=metric)
             model.fit(X_ref,labels_ref)
+            if sp.sparse.issparse(X_tar):
+                X_tar = X_tar.todense()
             labels_tar = model.predict(X_tar)
-            fates[metric] = labels_tar
             distances_tar = np.max(model.kneighbors(X_tar)[1],axis=1)
+            fates[metric] = labels_tar
             distances[metric] = distances_tar
 
         #Annotate fates
         annotation = fates.mode(axis=1).iloc[:,0]
 
         #Unassign fates without consensus between metrics
-        annotation[np.invert(np.isnan(fates.mode(axis=1).iloc[:,1]))] = unassigned_label
+        annotation[np.invert(pd.isna(fates.mode(axis=1).iloc[:,1].values))] = unassigned_label
 
         #Unassign fates with similarity below threshold
         annotation[distances.max(axis=1) < similarity_threshold] = unassigned_label
 
-    elif algorithm_flavor == "cells":
+        annotation = annotation.values
+
+    elif algorithm_flavor == "cell":
 
         #Define the labels
         labels_ref = reference_adata.obs[key_annotations].values.astype(str)
 
-        #Clasify cells
-        fates = pd.DataFrame()
-        distances = pd.DataFrame()
-
         #Create KNN classifier model
-        model = KNeighborsClassifier(n_neighbors=2,metric=metrics[0])
+        model = KNeighborsClassifier(n_neighbors=3,metric=metrics[0])
         #Fit model
+        if sp.sparse.issparse(X_ref):
+            X_ref = X_ref.todense()
         model.fit(X_ref,labels_ref)
         #
+        if sp.sparse.issparse(X_tar):
+            X_tar = X_tar.todense()
         labels_tar = model.predict(X_tar)
         probabilities = model.predict_proba(X_tar)
         distances_tar = np.max(model.kneighbors(X_tar)[1],axis=1)
 
         #Annotate fates
-        annotation = fates.mode(axis=1).iloc[:,0]
+        annotation = labels_tar
 
         #Unassign fates without consensus between metrics
-        annotation[probabilities < 1] = unassigned_label
+        annotation[np.max(probabilities,axis=1) < 1] = unassigned_label
 
         #Unassign fates with similarity below threshold
         annotation[distances_tar < similarity_threshold] = unassigned_label
 
     else:
 
-        raise ValueError("gene_selection_flavor has to chosen between `HVGs`, `random` or `dropout`.")
+        raise ValueError("algorithm_flavor has to chosen between `centroid` or `cell`.")
 
     # Return
     if inplace:
 
-        target_data.obs[key_added] = annotation
+        target_data.obs.loc[:,key_added] = annotation
         return
 
     else:
