@@ -1,3 +1,4 @@
 examples/*
 dist/*
 src/*egg-info/*
+__pycache__
