@@ -12,7 +12,7 @@ The purpose of this package is to map the annotations of a reference single-cell
 We implement three functions to do this pipeline of annotation.
 
  - `common_genes`: Function to find the common genes between both datasets.
- - `scmap`: Function to anotate the target dataset that implements the original scmap function.
+ - `scmap_annotate`: Function to anotate the target dataset that implements the original scmap function.
  - `scmap_projection`: Function to project the target dataset into a representation of the reference dataset.
 ## Example
 
@@ -33,7 +33,7 @@ scanpy.pp.highly_varying_genes(reference)
 With the common genes detected and the genes on interest selected, we can proceed to map the data.
 
 ```
-scmap(reference,target,"Gene_names","Annotation",algorithm_flavor="centroid",gene_selection_flavor="HVGs",similarity_threshold=.7, key_added="scmap_annotation")
+scmap_annotate(reference,target,"Gene_names","Annotation",algorithm_flavor="centroid",gene_selection_flavor="HVGs",similarity_threshold=.7, key_added="scmap_annotation")
 ```
 
 That is it. By default there will be a new column added in `target.obs` with the annotations.

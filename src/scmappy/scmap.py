@@ -54,7 +54,7 @@ def common_genes(adata1,adata2,key_genes,remove_unmached=False,add_key="Common_g
         
     return adata1, adata2
 
-def scmap(target_data, 
+def scmap_annotate(target_data, 
         reference_adata, 
         key_genes, 
         key_annotations,
