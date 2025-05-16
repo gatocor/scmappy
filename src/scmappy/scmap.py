@@ -6,7 +6,7 @@ import scipy as sp
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.linear_model import LinearRegression
 
-def common_genes(adata1,adata2,key_genes,remove_unmached=False,add_key="Common_genes"):
+def common_genes(adata1,adata2,key_genes=None,remove_unmached=False,add_key="Common_genes",inplace=True):
     """
     def common_genes(adata1,adata2,key_genes,remove_unmached=False,add_key="Common_genes")
     
@@ -24,43 +24,61 @@ def common_genes(adata1,adata2,key_genes,remove_unmached=False,add_key="Common_g
 
     Annotated data objects 1 and 2 with the unmatched genes removed or marked.
     """
+
+    if key_genes is None:
+        genes1 = adata1.var_names
+        genes1_set = set(adata1.var_names)
+        genes2 = adata2.var_names
+        genes2_set = set(adata2.var_names)
+    else:
+        genes1 = adata1.var[key_genes]
+        genes1_set = set(adata1.var[key_genes])
+        genes2 = adata2.var[key_genes]
+        genes2_set = set(adata2.var[key_genes])
+
+    if len(genes1) != len(genes1_set):
+        raise ValueError("There are duplicated genes in the target dataset. Please check the adata.var_names or adata.var[key_genes] to make sure there names are unique.")
+    if len(genes2) != len(genes2_set):
+        raise ValueError("There are duplicated genes in the reference dataset. Please check the adata.var_names or adata.var[key_genes] to make sure there names are unique.")
     
-    #Common genes
-    data1 = adata1.var.copy()
-    data2 = adata2.var.copy()
-    data1[add_key] = data1[key_genes].isin(data2[key_genes]).values
-    data2[add_key] = data2[key_genes].isin(data1[key_genes]).values
+    if set(genes1).intersection(set(genes2)) == set():
+        raise ValueError("No common genes between target and reference datasets. Please check the adata.var_names or adata.var[key_genes] tomake sure there names are equivalent between both datasets.")
+    else:
 
-    #Sort
-    data1.reset_index(inplace=True)
-    data1.sort_values([add_key,key_genes],inplace=True)
+        if inplace:
+            adata1_ = adata1
+            adata2_ = adata2
+        else:
+            adata1_ = adata1.copy()
+            adata2_ = adata2.copy()
 
-    data2.reset_index(inplace=True)
-    data2.sort_values([add_key,key_genes],inplace=True)
-        
-    #Eliminate not common genes
-    adata1 = adata1[:,data1.index.values].copy()
-    adata1.var[add_key] = data1[add_key].values
-    
-    adata2 = adata2[:,data2.index.values].copy()
-    adata2.var[add_key] = data2[add_key].values
-    
-    if remove_unmached:
-        adata1 = adata1[:,adata1.var[add_key]==True]
-        adata2 = adata2[:,adata2.var[add_key]==True]
+        #Get common genes
+        common_genes = list(genes1_set.intersection(genes2_set))
+        common_genes_order = np.argsort(common_genes)
 
-        adata1.var.reset_index(inplace=True)
-        adata2.var.reset_index(inplace=True)
-        
-    return adata1, adata2
+        #Get genes not in common
+        keep = keep = [gene in common_genes for gene in genes1_set]
+        adata1_.var[add_key] = keep
+        keep =  keep = [gene in common_genes for gene in genes2_set]
+        adata2_.var[add_key] = keep
 
-def scmap_annotate(target_data, 
+        if remove_unmached:
+            #Remove unmatched genes
+            adata1_ = adata1_[:, common_genes][:, common_genes_order]
+            adata2_ = adata2_[:, common_genes][:, common_genes_order]
+                
+        return adata1_, adata2_
+
+def scmap_annotate(
+        target_data, 
         reference_adata, 
-        key_genes, 
         key_annotations,
+        key_genes=None, 
+        key_layer=None,
         algorithm_flavor="centroid",
         gene_selection_flavor="HVGs",
         n_genes_selected=1000,
+        knn=3,
         metrics=["cosine","correlation"],
         similarity_threshold=.7,
         inplace=True,
@@ -70,8 +88,8 @@ def scmap_annotate(target_data,
     """
     def scmap(target_data, 
             reference_adata, 
-            key_genes, 
             key_annotations,
+            key_genes=None, 
             algorithm_flavor="centroid",
             gene_selection_flavor="HVGs",
             n_genes_selected=1000,
@@ -85,8 +103,9 @@ def scmap_annotate(target_data,
     Arguments:
      - target_data: AnnData object to be annotated. 
      - reference_adata: AnnData object to use as reference for annotation.
-     - key_genes: Key to be found in `target_data.var` and `reference_data.var` for finding the common genes between both populations. 
      - key_annotations: Key to be found in `reference_data.obs` with the labels to annotate the target data.
+     - key_genes: Key to be found in `target_data.var` and `reference_data.var` for finding the common genes between both populations. 
+     - key_layer: Key to be found in `target_data.layer`. If None, use the `adata.X` matrix. 
      - algorithm_flavor="centroid": Flavor of the algorithm to be chosen between "centroid" or "cells".
      - gene_selection_flavor="HVGs": Method to chose the gene subset to use for annotation. To choose between "HVGs" (high varying genes), "random" or "dropout".
      - n_genes_selected=1000: Number of genes to select for matching.
@@ -98,28 +117,22 @@ def scmap_annotate(target_data,
      - verbose=False: If to print information of the steps of the algorithm.
     """
 
-    #Find common genes between both datasets
-    genesintarget = target_data.var[key_genes].isin(reference_adata.var[key_genes]).values
-    genesinreference = reference_adata.var[key_genes].isin(target_data.var[key_genes]).values
-
-    if verbose:
-        print("Common genes:  ",np.sum(genesintarget)*100/len(genesintarget),"(%target)",np.sum(genesinreference)*100/len(genesinreference),"(%reference).")
+    target_data_, reference_adata_ = common_genes(target_data,reference_adata,key_genes=key_genes,remove_unmached=True,add_key="Common_genes",inplace=False)
 
     #Get genes to use for mapping
-    
     if gene_selection_flavor == "HVGs":
 
-        gene_subset = reference_adata.var.loc[reference_adata.var["highly_variable"].values,key_genes]
+        gene_subset = reference_adata_.var["highly_variable"].values
 
     elif gene_selection_flavor == "random":
 
-        gene_subset = np.random.choice(reference_adata.var[key_genes].values,size=n_genes_selected,replace=False)
+        gene_subset = np.random.choice(list(range(0,reference_adata_.shape[1])),size=n_genes_selected,replace=False)
 
     elif gene_selection_flavor == "dropout":
 
         # Remove log transformation if necessary
-        X = reference_adata.X.copy()
-        if 'log1p' in reference_adata.uns.keys():
+        X = reference_adata_.X.copy()
+        if 'log1p' in reference_adata_.uns.keys():
             X = np.expm1(X)
 
         # Make log(mean)
@@ -135,28 +148,39 @@ def scmap_annotate(target_data,
 
         # Get gene subset based on residuals
 
-        gene_subset = reference_adata.var[key_genes][np.argsort(-res)[:n_genes_selected]]
+        gene_subset = np.argsort(-res)[:n_genes_selected]
 
     else:
 
         raise ValueError("gene_selection_flavor has to chosen between `HVGs`, `random` or `dropout`.")
 
     #Get matrices with selected genes
+    if key_layer is None:
+        X_tar = target_data_.X[:, gene_subset]
+    else:
+        X_tar = target_data_.layers[key_layer][:, gene_subset]
 
-    retainedGenes_tar = target_data.var[key_genes].isin(gene_subset)
-    order_tar = np.argsort(target_data.var[key_genes].values)
-    X_tar = target_data.X[:,order_tar][:,retainedGenes_tar[order_tar]]
+    if key_layer is None:
+        X_ref = reference_adata_.X[:, gene_subset]
+    else:
+        X_ref = reference_adata_.layers[key_layer][:, gene_subset]
 
-    retainedGenes_ref = reference_adata.var[key_genes].isin(target_data.var.loc[retainedGenes_tar,key_genes].values)
-    order_ref = np.argsort(reference_adata.var[key_genes].values)
-    X_ref = reference_adata.X[:,order_ref][:,retainedGenes_ref[order_ref]]
+    #Convert to array if sparse
+    if sp.sparse.issparse(X_tar):
+        X_tar = X_tar.toarray()
+    else:
+        X_tar = np.asarray(X_tar)
+
+    if sp.sparse.issparse(X_ref):
+        X_ref = X_ref.toarray()
+    else:
+        X_ref = np.asarray(X_ref) 
 
     # Make knn classification
-
     if algorithm_flavor == "centroid":
 
         #Define the labels of cells and centroids
-        labels_ref_cells = reference_adata.obs[key_annotations].values.astype(str)
+        labels_ref_cells = reference_adata_.obs[key_annotations].values.astype(str)
         labels_ref = pd.unique(labels_ref_cells)
 
         #Make centroids based on the median expression
@@ -172,10 +196,8 @@ def scmap_annotate(target_data,
         fates = pd.DataFrame()
         distances = pd.DataFrame()
         for i,metric in enumerate(metrics):
-            model = KNeighborsClassifier(n_neighbors=1,metric=metric)
+            model = KNeighborsClassifier(n_neighbors=knn,metric=metric)
             model.fit(X_ref,labels_ref)
-            if sp.sparse.issparse(X_tar):
-                X_tar = X_tar.todense()
             labels_tar = model.predict(X_tar)
             distances_tar = np.max(model.kneighbors(X_tar)[1],axis=1)
             fates[metric] = labels_tar
@@ -195,17 +217,13 @@ def scmap_annotate(target_data,
     elif algorithm_flavor == "cell":
 
         #Define the labels
-        labels_ref = reference_adata.obs[key_annotations].values.astype(str)
+        labels_ref = reference_adata_.obs[key_annotations].values.astype(str)
 
         #Create KNN classifier model
-        model = KNeighborsClassifier(n_neighbors=3,metric=metrics[0])
+        model = KNeighborsClassifier(n_neighbors=knn,metric=metrics[0])
         #Fit model
-        if sp.sparse.issparse(X_ref):
-            X_ref = X_ref.todense()
         model.fit(X_ref,labels_ref)
         #
-        if sp.sparse.issparse(X_tar):
-            X_tar = X_tar.todense()
         labels_tar = model.predict(X_tar)
         probabilities = model.predict_proba(X_tar)
         distances_tar = np.max(model.kneighbors(X_tar)[1],axis=1)
@@ -214,7 +232,7 @@ def scmap_annotate(target_data,
         annotation = labels_tar
 
         #Unassign fates without consensus between metrics
-        annotation[np.max(probabilities,axis=1) < 1] = unassigned_label
+        annotation[np.max(probabilities,axis=1) < similarity_threshold] = unassigned_label
 
         #Unassign fates with similarity below threshold
         annotation[distances_tar < similarity_threshold] = unassigned_label
@@ -232,28 +250,32 @@ def scmap_annotate(target_data,
     else:
 
         return annotation
-    
+        
 def scmap_projection(target_data, 
         reference_adata, 
-        key_genes, 
         key_projection,
+        key_genes = None, 
+        key_layer=None,
         gene_selection_flavor="HVGs",
-        n_genes_selected=1000,
+        n_genes_selected=2000,
+        knn=1,
         metric="cosine",
         inplace=True,
-        key_added="scmap_projection",
+        key_added="X_scmap_projection",
         unassigned_label="Unassigned",
         verbose=False):
     """
     def scmap(target_data, 
             reference_adata, 
-            key_genes, 
             key_projection,
+            key_genes=None, 
+            key_layer=None,
             gene_selection_flavor="HVGs",
-            n_genes_selected=1000,
+            n_genes_selected=2000,
+            knn=1,
             metrics=["cosine","pearson"],
             inplace=True,
-            key_added="scmap_annotation",
+            key_added="X_scmap_projection",
             unassigned_label="Unassigned",
             verbose=False)
 
@@ -262,41 +284,35 @@ def scmap_projection(target_data,
     **Arguments**:
      - **target_data**: AnnData object to be annotated. 
      - **reference_adata**: AnnData object to use as reference for annotation.
-     - **key_genes**: Key to be found in `target_data.var` and `reference_data.var` for finding the common genes between both populations. 
      - **key_projection**: Key to be found in `reference_data.obs` with the labels to annotate the target data.
+     - **key_genes**: Key to be found in `target_data.var` and `reference_data.var` for finding the common genes between both populations. 
+     - key_layer: Key to be found in `target_data.layer`. If None, use the `adata.X` matrix. 
      - **algorithm_flavor="centroid"**: Flavor of the algorithm to be chosen between "centroid" or "cells".
      - **gene_selection_flavor="HVGs"**: Method to chose the gene subset to use for annotation. To choose between "HVGs" (high varying genes), "random" or "dropout".
      - **n_genes_selected=1000**: Number of genes to select for matching.
      - **metrics=["cosine","pearson","spearman"],**: Metrics to perform the projection. Use normalized metrics for a proper working of the algorithm.
      - **inplace=True**: If True, add the cells assigned to `target_data.obs` with label `key_added`.
-     - **key_added="scmap_annotation"**: If inplce is True, key added to `target_data.obs` with the Annotations.
+     - **key_added="X_scmap_projection"**: If inplce is True, key added to `target_data.obs` with the Annotations.
      - **unassigned_label="Unassigned"**: String added to this cells that do not fill the criteria of assignation.
      - **verbose=False**: If to print information of the steps of the algorithm.
     """
     
-
-    #Find common genes between both datasets
-    genesintarget = target_data.var[key_genes].isin(reference_adata.var[key_genes]).values
-    genesinreference = reference_adata.var[key_genes].isin(target_data.var[key_genes]).values
-
-    if verbose:
-        print("Common genes:  ",np.sum(genesintarget)*100/len(genesintarget),"(%target)",np.sum(genesinreference)*100/len(genesinreference),"(%reference).")
+    target_data_, reference_adata_ = common_genes(target_data,reference_adata,key_genes=key_genes,remove_unmached=True,add_key="Common_genes",inplace=False)
 
     #Get genes to use for mapping
-    
     if gene_selection_flavor == "HVGs":
 
-        gene_subset = reference_adata.var.loc[reference_adata.var["highly_variable"].values,key_genes]
+        gene_subset = reference_adata_.var["highly_variable"].values
 
     elif gene_selection_flavor == "random":
 
-        gene_subset = np.random.choice(reference_adata.var[key_genes].values,size=n_genes_selected,replace=False)
+        gene_subset = np.random.choice(list(range(0,reference_adata_.shape[1])),size=n_genes_selected,replace=False)
 
     elif gene_selection_flavor == "dropout":
 
         # Remove log transformation if necessary
-        X = reference_adata.X.copy()
-        if 'log1p' in reference_adata.uns.keys():
+        X = reference_adata_.X.copy()
+        if 'log1p' in reference_adata_.uns.keys():
             X = np.expm1(X)
 
         # Make log(mean)
@@ -312,29 +328,38 @@ def scmap_projection(target_data,
 
         # Get gene subset based on residuals
 
-        gene_subset = reference_adata.var[key_genes][np.argsort(-res)[:n_genes_selected]]
+        gene_subset = np.argsort(-res)[:n_genes_selected]
 
     else:
 
         raise ValueError("gene_selection_flavor has to chosen between `HVGs`, `random` or `dropout`.")
 
     #Get matrices with selected genes
+    if key_layer is None:
+        X_tar = target_data_.X[:, gene_subset]
+    else:
+        X_tar = target_data_.layers[key_layer][:, gene_subset]
 
-    retainedGenes_tar = target_data.var[key_genes].isin(gene_subset)
-    order_tar = np.argsort(target_data.var[key_genes].values)
-    X_tar = target_data.X[:,order_tar][:,retainedGenes_tar[order_tar]]
+    if key_layer is None:
+        X_ref = reference_adata_.X[:, gene_subset]
+    else:
+        X_ref = reference_adata_.layers[key_layer][:, gene_subset]
 
-    retainedGenes_ref = reference_adata.var[key_genes].isin(target_data.var.loc[retainedGenes_tar,key_genes].values)
-    order_ref = np.argsort(reference_adata.var[key_genes].values)
-    X_ref = reference_adata.X[:,order_ref][:,retainedGenes_ref[order_ref]]
+    #Convert to array if sparse
+    if sp.sparse.issparse(X_tar):
+        X_tar = X_tar.toarray()
+    else:
+        X_tar = np.asarray(X_tar)
+
+    if sp.sparse.issparse(X_ref):
+        X_ref = X_ref.toarray()
+    else:
+        X_ref = np.asarray(X_ref) 
 
     #Create KNN classifier model
-    model = KNeighborsRegressor(n_neighbors=1,metric=metric)
-    #Fit model
-    if sp.sparse.issparse(X_ref):
-        X_ref = X_ref.todense()
-        
-    Y = reference_adata.obsm[key_projection]
+    model = KNeighborsRegressor(n_neighbors=knn,metric=metric)
+    #Fit model        
+    Y = reference_adata_.obsm[key_projection]
     model.fit(X_ref,Y)
     
     Y_projected = model.predict(X_tar)
