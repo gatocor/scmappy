@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="scmappy",
-    version="0.2",
+    version="0.3",
     author='Gabriel Torregrosa Cortes',
     author_email="g.torregrosa@outlook.com",
     description="Cell annotation function",
