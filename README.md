@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/497041009.svg)](https://doi.org/10.5281/zenodo.15857647)
+
 # SCMAPpy
 
 Python version of scmap as described from the original paper of [Kilesev et al. (2017)](https://www.nature.com/articles/nmeth.4644)
